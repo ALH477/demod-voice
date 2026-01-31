@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: cachix/install-nix-action@v25
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      
+      - name: Check flake
+        run: nix flake check
+      
+      - name: Build package
+        run: nix build .#demod-voice
+      
+      - name: Test CLI help
+        run: nix run .#demod-voice -- --help
+
+  build-docker:
+    runs-on: ubuntu-latest
+    needs: check
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: cachix/install-nix-action@v25
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      
+      - name: Build Docker image
+        run: |
+          nix build .#dockerImage
+          docker load < result
+      
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Tag and push
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          docker tag demod-voice:latest ghcr.io/demodllc/demod-voice:$VERSION
+          docker tag demod-voice:latest ghcr.io/demodllc/demod-voice:latest
+          docker push ghcr.io/demodllc/demod-voice:$VERSION
+          docker push ghcr.io/demodllc/demod-voice:latest
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build-docker
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          generate_release_notes: true
+          body: |
+            ## Installation
+            
+            ```bash
+            nix run github:DeMoDLLC/voice-clone-flake#demod-voice
+            ```
+            
+            Or with Docker:
+            
+            ```bash
+            docker pull ghcr.io/demodllc/demod-voice:${{ github.ref_name }}
+            ```
