@@ -89,7 +89,24 @@
               pypinyin
               mecab-python3
               unidic-lite
-            ];
+              # Additional Coqui TTS dependencies
+              anyascii
+              aiohttp
+              flask
+              pysbd
+              umap-learn
+              pandas
+              matplotlib
+              trainer
+              jieba
+              nltk
+              encodec
+              unidecode
+              spacy
+            ] ++ (with pythonPkgs; [
+              # Language-specific packages that might not be in nixpkgs
+              # These are optional and build will skip if not found
+            ]);
 
             doCheck = false;
             
