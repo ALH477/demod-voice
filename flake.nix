@@ -36,6 +36,16 @@
             doCheck = false;
           });
           
+          # Pin Cython to version compatible with Coqui TTS
+          cython' = pythonPkgs.cython.overridePythonAttrs (oldAttrs: {
+            version = "0.29.37";
+            src = pkgs.fetchPypi {
+              pname = "Cython";
+              version = "0.29.37";
+              sha256 = "sha256-ml2pFHUd3Wlqi2bB0jTq3jubGL9gBv2GTrJ5dA7eWc=";
+            };
+          });
+          
           # Build Coqui TTS with specific Python
           coqui-tts = pythonPkgs.buildPythonPackage rec {
             pname = "TTS";
@@ -52,7 +62,7 @@
             nativeBuildInputs = with pythonPkgs; [
               setuptools
               wheel
-              cython
+              cython'
             ];
 
             propagatedBuildInputs = with pythonPkgs; [
