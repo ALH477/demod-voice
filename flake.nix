@@ -42,7 +42,7 @@
             src = pkgs.fetchPypi {
               pname = "Cython";
               version = "0.29.37";
-              sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+              sha256 = "sha256-+BPUpt2Ure5dT/JmGR0dlb9tQWSk+sxTVCLAIbJQTPs=";
             };
           });
           
