@@ -29,15 +29,116 @@ cd voice-clone-flake
 nix develop  # Enter development shell
 ```
 
-### Docker
+### Docker (Multi-Architecture)
+
+Pre-built images available for **x86_64 (AMD64)** and **ARM64** architectures with **CUDA**, **ROCm**, and **CPU-only** variants.
+
+#### Quick Start (Auto-Detect Architecture)
 
 ```bash
-docker pull ghcr.io/demodllc/demod-voice:latest
+# Pull the best image for your architecture
+# - AMD64: Gets CUDA variant (NVIDIA GPU support)
+# - ARM64: Gets CPU variant (Apple Silicon, AWS Graviton)
+docker pull alh477/demod-voice:latest
 
-# Run with GPU support
+# Or use GitHub Container Registry
+docker pull ghcr.io/alh477/demod-voice:latest
+```
+
+#### GPU-Accelerated (NVIDIA CUDA)
+
+```bash
+# Pull CUDA variant
+docker pull alh477/demod-voice:cuda
+
+# Run with NVIDIA GPU
 docker run --gpus all -v $(pwd):/workspace \
-  ghcr.io/demodllc/demod-voice:latest \
-  xtts-zero-shot /workspace/reference.wav "Hello world" --output /workspace/output.wav
+  alh477/demod-voice:cuda \
+  xtts-zero-shot /workspace/reference.wav "Hello world" \
+  --output /workspace/output.wav --gpu
+```
+
+#### GPU-Accelerated (AMD ROCm)
+
+```bash
+# Pull ROCm variant (AMD64 only)
+docker pull alh477/demod-voice:rocm
+
+# Run with AMD GPU
+docker run --device /dev/kfd --device /dev/dri -v $(pwd):/workspace \
+  alh477/demod-voice:rocm \
+  xtts-zero-shot /workspace/reference.wav "Hello world" \
+  --output /workspace/output.wav --gpu
+```
+
+#### CPU-Only (Smallest Image)
+
+```bash
+# Pull CPU variant (70% smaller!)
+docker pull alh477/demod-voice:cpu
+
+# Run without GPU
+docker run -v $(pwd):/workspace \
+  alh477/demod-voice:cpu \
+  xtts-zero-shot /workspace/reference.wav "Hello world" \
+  --output /workspace/output.wav
+```
+
+#### Available Image Tags
+
+| Tag | Description | Size | Best For |
+|-----|-------------|------|----------|
+| `latest` | Auto-detects architecture | ~4GB AMD64<br>~1GB ARM64 | Most users |
+| `cuda` | All CUDA variants | ~4GB | NVIDIA GPUs |
+| `rocm` | All ROCm variants | ~3.5GB | AMD GPUs |
+| `cpu` | All CPU variants | ~1.2GB | No GPU / Storage constrained |
+| `latest-amd64` | CUDA on AMD64 | ~4GB | Intel/AMD + NVIDIA |
+| `latest-arm64` | CPU on ARM64 | ~1GB | Apple Silicon, ARM servers |
+
+**Specific Versions:**
+- `1.0.0-cuda-amd64` - NVIDIA on Intel/AMD CPUs
+- `1.0.0-cuda-arm64` - NVIDIA on ARM (Jetson)
+- `1.0.0-rocm-amd64` - AMD on Intel/AMD CPUs
+- `1.0.0-cpu-amd64` - No GPU on Intel/AMD
+- `1.0.0-cpu-arm64` - No GPU on ARM (Apple Silicon, Graviton)
+
+**Registries:**
+- **DockerHub**: `alh477/demod-voice`
+- **GitHub Container Registry**: `ghcr.io/alh477/demod-voice`
+
+#### Which Image Should I Use?
+
+**Decision Tree:**
+
+1. **What CPU do you have?**
+   - Intel or AMD → Use `-amd64` images
+   - Apple Silicon (M1/M2/M3) → Use `-arm64` images
+   - AWS/Azure ARM instances → Use `-arm64` images
+
+2. **What GPU do you have?**
+   - NVIDIA (RTX, Tesla, A100) → Use `cuda` tag
+   - AMD (RX 6000/7000, MI series) → Use `rocm` tag
+   - No GPU / Cloud VM → Use `cpu` tag
+   - Not sure → Use `latest` (auto-detects best option)
+
+3. **Storage constrained?**
+   - Use `cpu` variant (70% smaller than CUDA)
+   - Or use `latest` which is optimized per-architecture
+
+**Examples:**
+
+```bash
+# Desktop with NVIDIA RTX
+docker pull alh477/demod-voice:cuda
+
+# MacBook Pro M3 (no GPU in Docker)
+docker pull alh477/demod-voice:cpu
+
+# AWS Graviton server
+docker pull alh477/demod-voice:cpu
+
+# Not sure - let Docker decide
+docker pull alh477/demod-voice:latest  # Works on any platform
 ```
 
 ## Requirements

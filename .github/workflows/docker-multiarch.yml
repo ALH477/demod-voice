@@ -1,0 +1,266 @@
+name: Multi-Arch Docker Build & Push
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      push_images:
+        description: 'Push images to registries'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+env:
+  REGISTRY_DOCKERHUB: alh477
+  REGISTRY_GHCR: ghcr.io/alh477
+  IMAGE_NAME: demod-voice
+
+jobs:
+  # Build matrix for all variants
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # AMD64 builds
+          - { runner: ubuntu-latest, arch: amd64, backend: cpu }
+          - { runner: ubuntu-latest, arch: amd64, backend: cuda }
+          - { runner: ubuntu-latest, arch: amd64, backend: rocm }
+          # ARM64 builds (using QEMU)
+          - { runner: ubuntu-latest, arch: arm64, backend: cpu }
+          - { runner: ubuntu-latest, arch: arm64, backend: cuda }
+          # Skip ROCm ARM64 (rare hardware)
+    
+    runs-on: ${{ matrix.runner }}
+    name: Build ${{ matrix.backend }}-${{ matrix.arch }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v25
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v14
+        with:
+          name: demod-voice
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          skipPush: ${{ github.event_name == 'pull_request' }}
+
+      - name: Build Docker image
+        run: |
+          nix build .#dockerImage-${{ matrix.backend }}-${{ matrix.arch }} --print-build-logs
+          docker load < result
+          
+          # Tag with version
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+          docker tag demod-voice:${VERSION}-${{ matrix.backend }}-${{ matrix.arch }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-${{ matrix.backend }}-${{ matrix.arch }}
+          docker tag demod-voice:${VERSION}-${{ matrix.backend }}-${{ matrix.arch }} ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-${{ matrix.backend }}-${{ matrix.arch }}
+          
+          echo "Built: ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-${{ matrix.backend }}-${{ matrix.arch }}"
+
+      - name: Test image
+        run: |
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+          docker run --rm ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-${{ matrix.backend }}-${{ matrix.arch }} health --json
+
+      - name: Login to DockerHub
+        if: github.event_name != 'pull_request' && github.event.inputs.push_images != 'false'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.REGISTRY_DOCKERHUB }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        if: github.event_name != 'pull_request' && github.event.inputs.push_images != 'false'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push images
+        if: github.event_name != 'pull_request' && github.event.inputs.push_images != 'false'
+        run: |
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+          docker push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-${{ matrix.backend }}-${{ matrix.arch }}
+          docker push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-${{ matrix.backend }}-${{ matrix.arch }}
+
+  # Create multi-arch manifests
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && github.event.inputs.push_images != 'false'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.REGISTRY_DOCKERHUB }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-arch manifests
+        run: |
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+          
+          # Backend-specific manifests (all architectures)
+          for BACKEND in cpu cuda; do
+            echo "Creating manifest for $BACKEND..."
+            docker manifest create ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-${BACKEND} \
+              ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-${BACKEND}-amd64 \
+              ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-${BACKEND}-arm64
+            docker manifest push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-${BACKEND}
+            
+            # GHCR
+            docker manifest create ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-${BACKEND} \
+              ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-${BACKEND}-amd64 \
+              ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-${BACKEND}-arm64
+            docker manifest push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-${BACKEND}
+          done
+          
+          # ROCm only for AMD64 (skip ARM64)
+          docker manifest create ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-rocm \
+            ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-rocm-amd64
+          docker manifest push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-rocm
+          
+          docker manifest create ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-rocm \
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-rocm-amd64
+          docker manifest push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-rocm
+          
+          # Architecture-specific 'latest' (CUDA for AMD64, CPU for ARM64 - best performance per arch)
+          docker manifest create ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:latest-amd64 \
+            ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-cuda-amd64
+          docker manifest push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:latest-amd64
+          
+          docker manifest create ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:latest-arm64 \
+            ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-cpu-arm64
+          docker manifest push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:latest-arm64
+          
+          # Main 'latest' tag (architecture-dependent)
+          docker manifest create ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:latest \
+            ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-cuda-amd64 \
+            ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-cpu-arm64
+          docker manifest push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:latest
+          
+          # Same for GHCR
+          docker manifest create ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest-amd64 \
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-cuda-amd64
+          docker manifest push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest-amd64
+          
+          docker manifest create ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest-arm64 \
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-cpu-arm64
+          docker manifest push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest-arm64
+          
+          docker manifest create ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest \
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-cuda-amd64 \
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-cpu-arm64
+          docker manifest push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest
+          
+          # Version tag (same as latest but versioned)
+          if [[ "$VERSION" == v* ]]; then
+            SHORT_VERSION=$(echo $VERSION | sed 's/^v//')
+            MAJOR_MINOR=$(echo $SHORT_VERSION | cut -d. -f1,2)
+            MAJOR=$(echo $SHORT_VERSION | cut -d. -f1)
+            
+            # Full version
+            docker manifest create ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION} \
+              ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-cuda-amd64 \
+              ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-cpu-arm64
+            docker manifest push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}
+            
+            # Short version (1.0.0)
+            docker manifest create ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${SHORT_VERSION} \
+              ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-cuda-amd64 \
+              ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-cpu-arm64
+            docker manifest push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${SHORT_VERSION}
+            
+            # Major.minor (1.0)
+            docker manifest create ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${MAJOR_MINOR} \
+              ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-cuda-amd64 \
+              ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-cpu-arm64
+            docker manifest push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${MAJOR_MINOR}
+            
+            # Major (1)
+            docker manifest create ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${MAJOR} \
+              ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-cuda-amd64 \
+              ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${VERSION}-cpu-arm64
+            docker manifest push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${MAJOR}
+            
+            # Same for GHCR
+            docker manifest create ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION} \
+              ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-cuda-amd64 \
+              ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-cpu-arm64
+            docker manifest push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}
+            
+            docker manifest create ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${SHORT_VERSION} \
+              ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-cuda-amd64 \
+              ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-cpu-arm64
+            docker manifest push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${SHORT_VERSION}
+            
+            docker manifest create ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${MAJOR_MINOR} \
+              ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-cuda-amd64 \
+              ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-cpu-arm64
+            docker manifest push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${MAJOR_MINOR}
+            
+            docker manifest create ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${MAJOR} \
+              ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-cuda-amd64 \
+              ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}-cpu-arm64
+            docker manifest push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${MAJOR}
+          fi
+
+  # Summary job
+  summary:
+    needs: [build, manifest]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Build Summary
+        run: |
+          echo "## Docker Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Available Images" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**DockerHub:**" >> $GITHUB_STEP_SUMMARY
+          echo "- \`alh477/demod-voice:latest\` - Auto-detects architecture" >> $GITHUB_STEP_SUMMARY
+          echo "- \`alh477/demod-voice:cuda\` - All CUDA variants" >> $GITHUB_STEP_SUMMARY
+          echo "- \`alh477/demod-voice:rocm\` - All ROCm variants" >> $GITHUB_STEP_SUMMARY
+          echo "- \`alh477/demod-voice:cpu\` - All CPU variants" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**GitHub Container Registry:**" >> $GITHUB_STEP_SUMMARY
+          echo "- \`ghcr.io/alh477/demod-voice:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Specific Tags" >> $GITHUB_STEP_SUMMARY
+          echo "- \`1.0.0-cuda-amd64\` - NVIDIA on Intel/AMD" >> $GITHUB_STEP_SUMMARY
+          echo "- \`1.0.0-cuda-arm64\` - NVIDIA on ARM" >> $GITHUB_STEP_SUMMARY
+          echo "- \`1.0.0-rocm-amd64\` - AMD on Intel/AMD" >> $GITHUB_STEP_SUMMARY
+          echo "- \`1.0.0-cpu-amd64\` - No GPU on Intel/AMD" >> $GITHUB_STEP_SUMMARY
+          echo "- \`1.0.0-cpu-arm64\` - No GPU on ARM (Apple Silicon)" >> $GITHUB_STEP_SUMMARY

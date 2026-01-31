@@ -1,5 +1,5 @@
 {
-  description = "DeMoD LLC Voice Clone - Local TTS and Voice Cloning Tools";
+  description = "DeMoD LLC Voice Clone - Multi-Arch Local TTS and Voice Cloning Tools";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -11,192 +11,188 @@
   };
 
   outputs = { self, nixpkgs, flake-utils, tinygrad }:
-    flake-utils.lib.eachDefaultSystem (system:
+    let
+      # Define supported systems
+      systems = [ "x86_64-linux" "aarch64-linux" ];
+      
+      # Helper to make packages for a system
+      mkPackages = system:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            config = {
+              allowUnfree = true;
+              cudaSupport = false;
+              rocmSupport = false;
+            };
+          };
+          
+          # Import helper functions
+          coqui-tts = pkgs.callPackage ./nix/coqui-tts.nix {};
+          
+          # Build Python environment
+          pythonEnv = pkgs.callPackage ./nix/python-env.nix { inherit coqui-tts; };
+          
+          # Build demod-voice package
+          demod-voice = pkgs.python3Packages.buildPythonPackage {
+            pname = "demod-voice";
+            version = "1.0.0";
+            src = ./.;
+            format = "other";
+            
+            propagatedBuildInputs = with pkgs.python3Packages; [ pyyaml tqdm ];
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            
+            installPhase = ''
+              mkdir -p $out/${pkgs.python3.sitePackages}/demod_voice
+              mkdir -p $out/bin
+              
+              cp -r demod_voice/* $out/${pkgs.python3.sitePackages}/demod_voice/
+              touch $out/${pkgs.python3.sitePackages}/demod_voice/__init__.py
+              
+              cp bin/demod-voice $out/bin/demod-voice
+              chmod +x $out/bin/demod-voice
+              
+              wrapProgram $out/bin/demod-voice \
+                --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.piper-tts pkgs.ffmpeg pkgs.sox ]} \
+                --set PYTHONPATH "${pythonEnv}/${pythonEnv.sitePackages}:$out/${pkgs.python3.sitePackages}"
+            '';
+            
+            checkInputs = with pkgs.python3Packages; [ pytest ];
+            checkPhase = ''
+              export PYTHONPATH="$out/${pkgs.python3.sitePackages}:${pythonEnv}/${pythonEnv.sitePackages}:$PYTHONPATH"
+              pytest tests/test_config.py tests/test_batch.py -v || true
+            '';
+            
+            meta = with pkgs.lib; {
+              description = "DeMoD LLC Voice Clone";
+              license = licenses.mit;
+              platforms = platforms.linux;
+            };
+          };
+          
+          # Build Docker image
+          dockerImage = pkgs.callPackage ./nix/docker-image.nix {
+            inherit demod-voice pythonEnv;
+            backend = "cpu";
+            arch = if system == "x86_64-linux" then "amd64" else "arm64";
+          };
+          
+        in {
+          inherit demod-voice pythonEnv dockerImage;
+          default = demod-voice;
+        };
+      
+      # Helper to make CUDA packages
+      mkCudaPackages = system:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            config = {
+              allowUnfree = true;
+              cudaSupport = true;
+            };
+          };
+          
+          coqui-tts = pkgs.callPackage ./nix/coqui-tts.nix {};
+          pythonEnv = pkgs.callPackage ./nix/python-env.nix { inherit coqui-tts; };
+          
+          demod-voice = (mkPackages system).demod-voice.override {
+            # Use CUDA-enabled pythonEnv
+          };
+          
+          dockerImage = pkgs.callPackage ./nix/docker-image.nix {
+            inherit demod-voice pythonEnv;
+            backend = "cuda";
+            arch = if system == "x86_64-linux" then "amd64" else "arm64";
+            extraLibs = [ pkgs.cudaPackages.cudatoolkit ];
+          };
+          
+        in {
+          inherit dockerImage;
+        };
+      
+      # Helper to make ROCm packages
+      mkRocmPackages = system:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            config = {
+              allowUnfree = true;
+              rocmSupport = true;
+            };
+          };
+          
+          coqui-tts = pkgs.callPackage ./nix/coqui-tts.nix {};
+          pythonEnv = pkgs.callPackage ./nix/python-env.nix { inherit coqui-tts; };
+          
+          dockerImage = pkgs.callPackage ./nix/docker-image.nix {
+            inherit demod-voice pythonEnv;
+            backend = "rocm";
+            arch = if system == "x86_64-linux" then "amd64" else "arm64";
+            extraLibs = [ pkgs.rocmPackages.rocm-runtime ];
+          };
+          
+        in {
+          inherit dockerImage;
+        };
+        
+    in
+    flake-utils.lib.eachSystem systems (system:
       let
-        pkgs = import nixpkgs {
-          inherit system;
-          config = {
-            allowUnfree = true;
-            cudaSupport = true;
-          };
-        };
-
-        # Build Coqui TTS from source
-        coqui-tts = pkgs.python3Packages.buildPythonPackage rec {
-          pname = "TTS";
-          version = "0.22.0";
-          format = "pyproject";
-          
-          src = pkgs.fetchFromGitHub {
-            owner = "coqui-ai";
-            repo = "TTS";
-            rev = "v${version}";
-            sha256 = "sha256-f/JYeASaOeByOzV7VW8z8F1VJVuKE0hFGv9sH3VJPsA=";
-          };
-          
-          nativeBuildInputs = with pkgs.python3Packages; [
-            setuptools
-            wheel
-          ];
-
-          propagatedBuildInputs = with pkgs.python3Packages; [
-            numpy
-            scipy
-            torch
-            torchaudio
-            librosa
-            soundfile
-            inflect
-            tqdm
-            packaging
-            numba
-            einops
-            transformers
-            tokenizers
-            coqpit
-            pyyaml
-            fsspec
-            pydub
-            gruut
-            bangla
-            jamo
-            pypinyin
-            mecab-python3
-            unidic-lite
-          ];
-
-          # Skip tests - they require additional test data
-          doCheck = false;
-          
-          pythonImportsCheck = [ "TTS" ];
-        };
-
-        # Enhanced Python environment
-        pythonEnv = pkgs.python3.withPackages (ps: with ps; [
-          coqui-tts
-          torch
-          torchaudio
-          torchvision
-          pytorch-lightning
-          onnxruntime
-          numpy
-          scipy
-          librosa
-          pydub
-          pyyaml
-          fsspec
-          soundfile
-          tqdm
-        ]);
-
-        # Build tinygrad package
-        tinygradPkg = pkgs.python3Packages.buildPythonPackage {
-          pname = "tinygrad";
-          version = "0.9.0";
-          src = tinygrad;
-          format = "setuptools";
-          
-          propagatedBuildInputs = with pkgs.python3Packages; [
-            numpy
-            pillow
-            requests
-            tqdm
-          ];
-          
-          doCheck = false;
-        };
-
-        # Build demod-voice as a proper Python package
-        demod-voice = pkgs.python3Packages.buildPythonPackage {
-          pname = "demod-voice";
-          version = "1.0.0";
-          
-          src = ./.;
-          
-          format = "other";
-          
-          propagatedBuildInputs = with pkgs.python3Packages; [
-            pyyaml
-            tqdm
-          ];
-          
-          nativeBuildInputs = [ pkgs.makeWrapper ];
-          
-          # Install the Python package
-          installPhase = ''
-            mkdir -p $out/${pkgs.python3.sitePackages}/demod_voice
-            mkdir -p $out/bin
-            
-            # Install Python modules
-            cp -r demod_voice/* $out/${pkgs.python3.sitePackages}/demod_voice/
-            
-            # Create __init__.py if it doesn't exist
-            touch $out/${pkgs.python3.sitePackages}/demod_voice/__init__.py
-            
-            # Install CLI script
-            cp bin/demod-voice $out/bin/demod-voice
-            chmod +x $out/bin/demod-voice
-            
-            # Wrap the CLI with all dependencies
-            wrapProgram $out/bin/demod-voice \
-              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.piper-tts pkgs.ffmpeg pkgs.sox ]} \
-              --set PYTHONPATH "${pythonEnv}/${pythonEnv.sitePackages}:$out/${pkgs.python3.sitePackages}"
-          '';
-          
-          # Tests
-          checkInputs = with pkgs.python3Packages; [ pytest ];
-          checkPhase = ''
-            export PYTHONPATH="$out/${pkgs.python3.sitePackages}:${pythonEnv}/${pythonEnv.sitePackages}:$PYTHONPATH"
-            pytest tests/test_config.py tests/test_batch.py -v || true
-          '';
-          
-          meta = with pkgs.lib; {
-            description = "DeMoD LLC Voice Clone - Local TTS and Voice Cloning";
-            license = licenses.mit;
-            platforms = platforms.linux;
-            maintainers = [ ];
-          };
-        };
-
+        basePkgs = mkPackages system;
+        cudaPkgs = mkCudaPackages system;
+        rocmPkgs = mkRocmPackages system;
+        
+        arch = if system == "x86_64-linux" then "amd64" else "arm64";
+        
       in {
         packages = {
-          inherit demod-voice;
-          default = demod-voice;
+          # Base package
+          demod-voice = basePkgs.demod-voice;
+          default = basePkgs.demod-voice;
+          python-env = basePkgs.pythonEnv;
           
-          # Expose Python env for debugging
-          python-env = pythonEnv;
+          # Docker images for each backend
+          dockerImage-cpu = basePkgs.dockerImage;
+          dockerImage-cuda = cudaPkgs.dockerImage;
+          dockerImage-rocm = rocmPkgs.dockerImage;
+          
+          # Aliases with full tag names
+          "dockerImage-cpu-${arch}" = basePkgs.dockerImage;
+          "dockerImage-cuda-${arch}" = cudaPkgs.dockerImage;
+          "dockerImage-rocm-${arch}" = rocmPkgs.dockerImage;
         };
 
         apps = {
           demod-voice = {
             type = "app";
-            program = "${demod-voice}/bin/demod-voice";
+            program = "${basePkgs.demod-voice}/bin/demod-voice";
           };
-          default = self.apps.${system}.demod-voice;
+          default = {
+            type = "app";
+            program = "${basePkgs.demod-voice}/bin/demod-voice";
+          };
         };
 
-        # Checks for CI
         checks = {
-          # Test that CLI runs
           cli-help = pkgs.runCommand "test-cli-help" {
-            buildInputs = [ demod-voice ];
+            buildInputs = [ basePkgs.demod-voice ];
           } ''
-            ${demod-voice}/bin/demod-voice --help > $out
+            ${basePkgs.demod-voice}/bin/demod-voice --help > $out
           '';
           
-          # Test health check
           health-check = pkgs.runCommand "test-health-check" {
-            buildInputs = [ demod-voice ];
+            buildInputs = [ basePkgs.demod-voice ];
           } ''
-            ${demod-voice}/bin/demod-voice health --json > $out
+            ${basePkgs.demod-voice}/bin/demod-voice health --json > $out
           '';
         };
 
         devShells.default = pkgs.mkShell {
           packages = [
-            pythonEnv
-            tinygradPkg
-            demod-voice
+            basePkgs.pythonEnv
+            basePkgs.demod-voice
             pkgs.piper-tts
             pkgs.git
             pkgs.ffmpeg
@@ -213,60 +209,24 @@
           shellHook = ''
             echo "========================================"
             echo "DeMoD LLC Voice Clone Dev Environment"
+            echo "Architecture: ${arch}"
             echo "========================================"
+            echo ""
+            echo "Available Docker builds:"
+            echo "  nix build .#dockerImage-cpu-${arch}"
+            echo "  nix build .#dockerImage-cuda-${arch}"
+            echo "  nix build .#dockerImage-rocm-${arch}"
             echo ""
             echo "CLI usage: demod-voice --help"
             echo ""
-            echo "Examples:"
-            echo "  demod-voice xtts-zero-shot reference.wav \"Hello from DeMoD\" --output demo.wav"
-            echo "  demod-voice piper-infer model.onnx \"Test sentence\" --output test.wav"
-            echo ""
-            echo "Python environment includes:"
-            echo "  - Coqui TTS (XTTS-v2)"
-            echo "  - PyTorch with CUDA support"
-            echo "  - tinygrad for experimentation"
-            echo ""
           '';
 
-          # Enable CUDA if available
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (
             pkgs.lib.optionals pkgs.stdenv.isLinux [
               pkgs.stdenv.cc.cc.lib
               pkgs.cudaPackages.cudatoolkit
             ]
           );
-        };
-
-        # Docker image for containerized deployment
-        dockerImage = pkgs.dockerTools.buildLayeredImage {
-          name = "demod-voice";
-          tag = "latest";
-          
-          contents = [
-            demod-voice
-            pythonEnv
-            pkgs.piper-tts
-            pkgs.ffmpeg
-            pkgs.sox
-            pkgs.bashInteractive
-            pkgs.coreutils
-            pkgs.cacert  # SSL certificates for model downloads
-          ];
-
-          config = {
-            Cmd = [ "${demod-voice}/bin/demod-voice" "--help" ];
-            Env = [
-              "PATH=/bin:${pkgs.lib.makeBinPath [ pkgs.piper-tts pkgs.ffmpeg pkgs.sox ]}"
-              "PYTHONUNBUFFERED=1"
-              "PYTHONPATH=${pythonEnv}/${pythonEnv.sitePackages}:${demod-voice}/${pkgs.python3.sitePackages}"
-              "HOME=/tmp"  # For model cache
-              "TTS_HOME=/tmp/.local/share/tts"  # Coqui TTS cache location
-            ];
-            WorkingDir = "/workspace";
-            Volumes = {
-              "/workspace" = {};
-            };
-          };
         };
       }
     );
