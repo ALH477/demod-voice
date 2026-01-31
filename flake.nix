@@ -36,6 +36,26 @@
             doCheck = false;
           });
           
+          pytest-doctestplus' = pythonPkgs.pytest-doctestplus.overridePythonAttrs (oldAttrs: {
+            doCheck = false;
+          });
+          
+          astropy' = pythonPkgs.astropy.overridePythonAttrs (oldAttrs: {
+            doCheck = false;
+          });
+          
+          imageio' = pythonPkgs.imageio.overridePythonAttrs (oldAttrs: {
+            doCheck = false;
+          });
+          
+          scikit-image' = pythonPkgs.scikit-image.overridePythonAttrs (oldAttrs: {
+            doCheck = false;
+          });
+          
+          moviepy' = pythonPkgs.moviepy.overridePythonAttrs (oldAttrs: {
+            doCheck = false;
+          });
+          
           # Pin Cython to version compatible with Coqui TTS
           cython' = pythonPkgs.cython.overridePythonAttrs (oldAttrs: {
             version = "0.29.37";
