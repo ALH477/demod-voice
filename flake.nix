@@ -15,8 +15,8 @@
       # Define supported systems
       systems = [ "x86_64-linux" "aarch64-linux" ];
       
-      # Helper to make packages for a system
-      mkPackages = system:
+      # Helper to make packages for a system with specific Python version
+      mkPackages = system: pythonVersion:
         let
           pkgs = import nixpkgs {
             inherit system;
@@ -27,40 +27,106 @@
             };
           };
           
-          # Import helper functions
-          coqui-tts = pkgs.callPackage ./nix/coqui-tts.nix {};
+          # Select Python version (311 for Coqui TTS compatibility)
+          python = if pythonVersion == "311" then pkgs.python311 else pkgs.python3;
+          pythonPkgs = python.pkgs;
+          
+          # Build Coqui TTS with specific Python
+          coqui-tts = pythonPkgs.buildPythonPackage rec {
+            pname = "TTS";
+            version = "0.22.0";
+            format = "pyproject";
+            
+            src = pkgs.fetchFromGitHub {
+              owner = "coqui-ai";
+              repo = "TTS";
+              rev = "v${version}";
+              sha256 = "sha256-RQVlPHYZ5X/6xbxwGNcgntcyAsBS8T2ketdk+OCIS3Q=";
+            };
+            
+            nativeBuildInputs = with pythonPkgs; [
+              setuptools
+              wheel
+              cython
+            ];
+
+            propagatedBuildInputs = with pythonPkgs; [
+              numpy
+              scipy
+              torch
+              torchaudio
+              librosa
+              soundfile
+              inflect
+              tqdm
+              packaging
+              numba
+              einops
+              transformers
+              tokenizers
+              coqpit
+              pyyaml
+              fsspec
+              pydub
+              gruut
+              bangla
+              jamo
+              pypinyin
+              mecab-python3
+              unidic-lite
+            ];
+
+            doCheck = false;
+            
+            pythonImportsCheck = [ "TTS" ];
+          };
           
           # Build Python environment
-          pythonEnv = pkgs.callPackage ./nix/python-env.nix { inherit coqui-tts; };
+          pythonEnv = python.withPackages (ps: with ps; [
+            coqui-tts
+            torch
+            torchaudio
+            torchvision
+            pytorch-lightning
+            onnxruntime
+            numpy
+            scipy
+            librosa
+            pydub
+            pyyaml
+            fsspec
+            soundfile
+            tqdm
+          ]);
           
           # Build demod-voice package
-          demod-voice = pkgs.python3Packages.buildPythonPackage {
+          demod-voice = pythonPkgs.buildPythonPackage {
             pname = "demod-voice";
             version = "1.0.0";
             src = ./.;
             format = "other";
             
-            propagatedBuildInputs = with pkgs.python3Packages; [ pyyaml tqdm ];
+            propagatedBuildInputs = with pythonPkgs; [ pyyaml tqdm ];
             nativeBuildInputs = [ pkgs.makeWrapper ];
             
             installPhase = ''
-              mkdir -p $out/${pkgs.python3.sitePackages}/demod_voice
+              mkdir -p $out/${python.sitePackages}/demod_voice
               mkdir -p $out/bin
               
-              cp -r demod_voice/* $out/${pkgs.python3.sitePackages}/demod_voice/
-              touch $out/${pkgs.python3.sitePackages}/demod_voice/__init__.py
+              cp -r demod_voice/* $out/${python.sitePackages}/demod_voice/
+              touch $out/${python.sitePackages}/demod_voice/__init__.py
               
               cp bin/demod-voice $out/bin/demod-voice
               chmod +x $out/bin/demod-voice
               
               wrapProgram $out/bin/demod-voice \
                 --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.piper-tts pkgs.ffmpeg pkgs.sox ]} \
-                --set PYTHONPATH "${pythonEnv}/${pythonEnv.sitePackages}:$out/${pkgs.python3.sitePackages}"
+                --set PYTHONPATH "${pythonEnv}/${python.sitePackages}:$out/${python.sitePackages}"
             '';
             
-            checkInputs = with pkgs.python3Packages; [ pytest ];
+            checkInputs = with pythonPkgs; [ pytest ];
             checkPhase = ''
-              export PYTHONPATH="$out/${pkgs.python3.sitePackages}:${pythonEnv}/${pythonEnv.sitePackages}:$PYTHONPATH"
+              export PYTHONPATH="$out/${python.sitePackages}:${pythonEnv}/${python.sitePackages}:$PYTHONPATH"
               pytest tests/test_config.py tests/test_batch.py -v || true
             '';
             
@@ -71,75 +137,69 @@
             };
           };
           
-          # Build Docker image
-          dockerImage = pkgs.callPackage ./nix/docker-image.nix {
-            inherit demod-voice pythonEnv;
-            backend = "cpu";
-            arch = if system == "x86_64-linux" then "amd64" else "arm64";
-          };
-          
         in {
-          inherit demod-voice pythonEnv dockerImage;
-          default = demod-voice;
+          inherit demod-voice pythonEnv python pythonPkgs;
         };
       
-      # Helper to make CUDA packages
-      mkCudaPackages = system:
+      # Build Docker image helper
+      mkDockerImage = { pkgs, demod-voice, pythonEnv, python, backend, arch, extraLibs ? [] }:
         let
-          pkgs = import nixpkgs {
-            inherit system;
-            config = {
-              allowUnfree = true;
-              cudaSupport = true;
+          version = "1.0.0";
+          
+          backendEnv = 
+            if backend == "cuda" then [
+              "NVIDIA_VISIBLE_DEVICES=all"
+              "NVIDIA_DRIVER_CAPABILITIES=compute,utility"
+            ]
+            else if backend == "rocm" then [
+              "HSA_OVERRIDE_GFX_VERSION=10.3.0"
+              "ROCM_PATH=/opt/rocm"
+            ]
+            else [];
+            
+        in
+        pkgs.dockerTools.buildLayeredImage {
+          name = "demod-voice";
+          tag = "${version}-${backend}-${arch}";
+          
+          contents = [
+            demod-voice
+            pythonEnv
+            pkgs.piper-tts
+            pkgs.ffmpeg
+            pkgs.sox
+            pkgs.bashInteractive
+            pkgs.coreutils
+            pkgs.cacert
+          ] ++ extraLibs;
+
+          config = {
+            Cmd = [ "${demod-voice}/bin/demod-voice" "--help" ];
+            Env = [
+              "PATH=/bin:${pkgs.lib.makeBinPath ([ pkgs.piper-tts pkgs.ffmpeg pkgs.sox ] ++ extraLibs)}"
+              "PYTHONUNBUFFERED=1"
+              "PYTHONPATH=${pythonEnv}/${python.sitePackages}:${demod-voice}/${python.sitePackages}"
+              "HOME=/tmp"
+              "TTS_HOME=/tmp/.local/share/tts"
+            ] ++ backendEnv;
+            WorkingDir = "/workspace";
+            Volumes = {
+              "/workspace" = {};
             };
           };
           
-          coqui-tts = pkgs.callPackage ./nix/coqui-tts.nix {};
-          pythonEnv = pkgs.callPackage ./nix/python-env.nix { inherit coqui-tts; };
-          
-          demod-voice = (mkPackages system).demod-voice.override {
-            # Use CUDA-enabled pythonEnv
-          };
-          
-          dockerImage = pkgs.callPackage ./nix/docker-image.nix {
-            inherit demod-voice pythonEnv;
-            backend = "cuda";
-            arch = if system == "x86_64-linux" then "amd64" else "arm64";
-            extraLibs = [ pkgs.cudaPackages.cudatoolkit ];
-          };
-          
-        in {
-          inherit dockerImage;
-        };
-      
-      # Helper to make ROCm packages
-      mkRocmPackages = system: demod-voice:
-        let
-          pkgs = import nixpkgs {
-            inherit system;
-            config = {
-              allowUnfree = true;
-              rocmSupport = true;
-            };
-          };
-          
-          coqui-tts = pkgs.callPackage ./nix/coqui-tts.nix {};
-          pythonEnv = pkgs.callPackage ./nix/python-env.nix { inherit coqui-tts; };
-          
-          dockerImage = pkgs.callPackage ./nix/docker-image.nix {
-            inherit demod-voice pythonEnv;
-            backend = "rocm";
-            arch = if system == "x86_64-linux" then "amd64" else "arm64";
-            extraLibs = [ pkgs.rocmPackages.rocm-runtime ];
-          };
-          
-        in {
-          inherit dockerImage;
+          maxLayers = 100;
         };
         
     in
     flake-utils.lib.eachSystem systems (system:
       let
+        # Use Python 3.11 for Coqui TTS compatibility (requires < 3.12)
+        basePkgs = mkPackages system "311";
+        
+        arch = if system == "x86_64-linux" then "amd64" else "arm64";
+        
+        # Base imports for checks and devShell
         pkgs = import nixpkgs {
           inherit system;
           config = {
@@ -149,11 +209,53 @@
           };
         };
         
-        basePkgs = mkPackages system;
-        cudaPkgs = mkCudaPackages system;
-        rocmPkgs = mkRocmPackages system basePkgs.demod-voice;
+        # CUDA variant
+        cudaPkgs = import nixpkgs {
+          inherit system;
+          config = {
+            allowUnfree = true;
+            cudaSupport = true;
+          };
+        };
         
-        arch = if system == "x86_64-linux" then "amd64" else "arm64";
+        cudaBase = mkPackages system "311";
+        
+        dockerImage-cuda = mkDockerImage {
+          pkgs = cudaPkgs;
+          inherit (cudaBase) demod-voice pythonEnv;
+          python = cudaBase.python;
+          backend = "cuda";
+          inherit arch;
+          extraLibs = [ cudaPkgs.cudaPackages.cudatoolkit ];
+        };
+        
+        # ROCm variant
+        rocmPkgs = import nixpkgs {
+          inherit system;
+          config = {
+            allowUnfree = true;
+            rocmSupport = true;
+          };
+        };
+        
+        rocmBase = mkPackages system "311";
+        
+        dockerImage-rocm = mkDockerImage {
+          pkgs = rocmPkgs;
+          inherit (rocmBase) demod-voice pythonEnv;
+          python = rocmBase.python;
+          backend = "rocm";
+          inherit arch;
+          extraLibs = [ rocmPkgs.rocmPackages.rocm-runtime ];
+        };
+        
+        # CPU variant
+        dockerImage-cpu = mkDockerImage {
+          inherit pkgs;
+          inherit (basePkgs) demod-voice pythonEnv python;
+          backend = "cpu";
+          inherit arch;
+        };
         
       in {
         packages = {
@@ -163,14 +265,12 @@
           python-env = basePkgs.pythonEnv;
           
           # Docker images for each backend
-          dockerImage-cpu = basePkgs.dockerImage;
-          dockerImage-cuda = cudaPkgs.dockerImage;
-          dockerImage-rocm = rocmPkgs.dockerImage;
+          inherit dockerImage-cpu dockerImage-cuda dockerImage-rocm;
           
           # Aliases with full tag names
-          "dockerImage-cpu-${arch}" = basePkgs.dockerImage;
-          "dockerImage-cuda-${arch}" = cudaPkgs.dockerImage;
-          "dockerImage-rocm-${arch}" = rocmPkgs.dockerImage;
+          "dockerImage-cpu-${arch}" = dockerImage-cpu;
+          "dockerImage-cuda-${arch}" = dockerImage-cuda;
+          "dockerImage-rocm-${arch}" = dockerImage-rocm;
         };
 
         apps = {
@@ -206,10 +306,10 @@
             pkgs.git
             pkgs.ffmpeg
             pkgs.sox
-            pkgs.python3Packages.black
-            pkgs.python3Packages.ruff
-            pkgs.python3Packages.mypy
-            pkgs.python3Packages.pytest
+            pkgs.python311Packages.black
+            pkgs.python311Packages.ruff
+            pkgs.python311Packages.mypy
+            pkgs.python311Packages.pytest
           ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
             pkgs.cudaPackages.cudatoolkit
             pkgs.vulkan-loader
@@ -219,6 +319,7 @@
             echo "========================================"
             echo "DeMoD LLC Voice Clone Dev Environment"
             echo "Architecture: ${arch}"
+            echo "Python: 3.11 (for Coqui TTS compatibility)"
             echo "========================================"
             echo ""
             echo "Available Docker builds:"
