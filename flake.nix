@@ -29,32 +29,30 @@
           
           # Select Python version (311 for Coqui TTS compatibility)
           python = if pythonVersion == "311" then pkgs.python311 else pkgs.python3;
-          pythonPkgs = python.pkgs;
           
-          # Override packages with flaky tests
-          einops' = pythonPkgs.einops.overridePythonAttrs (oldAttrs: {
-            doCheck = false;
-          });
-          
-          pytest-doctestplus' = pythonPkgs.pytest-doctestplus.overridePythonAttrs (oldAttrs: {
-            doCheck = false;
-          });
-          
-          astropy' = pythonPkgs.astropy.overridePythonAttrs (oldAttrs: {
-            doCheck = false;
-          });
-          
-          imageio' = pythonPkgs.imageio.overridePythonAttrs (oldAttrs: {
-            doCheck = false;
-          });
-          
-          scikit-image' = pythonPkgs.scikit-image.overridePythonAttrs (oldAttrs: {
-            doCheck = false;
-          });
-          
-          moviepy' = pythonPkgs.moviepy.overridePythonAttrs (oldAttrs: {
-            doCheck = false;
-          });
+          # Create package set with test-disabled overrides
+          pythonPkgs = python.pkgs.override {
+            overrides = self: super: {
+              einops = super.einops.overridePythonAttrs (oldAttrs: {
+                doCheck = false;
+              });
+              pytest-doctestplus = super.pytest-doctestplus.overridePythonAttrs (oldAttrs: {
+                doCheck = false;
+              });
+              astropy = super.astropy.overridePythonAttrs (oldAttrs: {
+                doCheck = false;
+              });
+              imageio = super.imageio.overridePythonAttrs (oldAttrs: {
+                doCheck = false;
+              });
+              scikit-image = super.scikit-image.overridePythonAttrs (oldAttrs: {
+                doCheck = false;
+              });
+              moviepy = super.moviepy.overridePythonAttrs (oldAttrs: {
+                doCheck = false;
+              });
+            };
+          };
           
           # Pin Cython to version compatible with Coqui TTS
           cython' = pythonPkgs.cython.overridePythonAttrs (oldAttrs: {
@@ -96,7 +94,7 @@
               tqdm
               packaging
               numba
-              einops'
+              einops
               transformers
               tokenizers
               coqpit
