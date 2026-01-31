@@ -1,17 +1,35 @@
 name: Multi-Arch Docker Build & Push
 
+# DISABLED: This workflow is disabled by default to prevent accidental builds.
+# To enable, uncomment the 'on' section below and configure the required secrets.
+# 
+# REQUIRED SECRETS:
+# - DOCKERHUB_TOKEN: DockerHub access token for alh477 account
+# - CACHIX_AUTH_TOKEN: (Optional) Cachix authentication token for build caching
+#
+# NOTE: Building all variants takes 4-6 hours and requires significant compute resources.
+# Each image is 1-4GB in size. Only enable when ready to publish official releases.
+
 on:
-  push:
-    branches: [ main ]
-    tags: [ 'v*' ]
-  pull_request:
-    branches: [ main ]
+  # push:
+  #   branches: [ main ]
+  #   tags: [ 'v*' ]
+  # pull_request:
+  #   branches: [ main ]
   workflow_dispatch:
     inputs:
       push_images:
         description: 'Push images to registries'
         required: true
-        default: 'true'
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      build_arm64:
+        description: 'Build ARM64 variants (slower, requires QEMU)'
+        required: true
+        default: 'false'
         type: choice
         options:
           - 'true'
@@ -23,23 +41,41 @@ env:
   IMAGE_NAME: demod-voice
 
 jobs:
+  # Check required secrets
+  check-secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check DockerHub Token
+        run: |
+          if [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            echo "❌ ERROR: DOCKERHUB_TOKEN secret is not configured"
+            echo "Please add DOCKERHUB_TOKEN to your repository secrets"
+            echo "Get a token from: https://hub.docker.com/settings/security"
+            exit 1
+          fi
+          echo "✅ DockerHub token is configured"
+
   # Build matrix for all variants
   build:
+    needs: check-secrets
     strategy:
       fail-fast: false
       matrix:
         include:
-          # AMD64 builds
+          # AMD64 builds (always included)
           - { runner: ubuntu-latest, arch: amd64, backend: cpu }
           - { runner: ubuntu-latest, arch: amd64, backend: cuda }
           - { runner: ubuntu-latest, arch: amd64, backend: rocm }
-          # ARM64 builds (using QEMU)
-          - { runner: ubuntu-latest, arch: arm64, backend: cpu }
-          - { runner: ubuntu-latest, arch: arm64, backend: cuda }
+          # ARM64 builds (only if build_arm64 input is 'true')
+          - { runner: ubuntu-latest, arch: arm64, backend: cpu, conditional: true }
+          - { runner: ubuntu-latest, arch: arm64, backend: cuda, conditional: true }
           # Skip ROCm ARM64 (rare hardware)
     
     runs-on: ${{ matrix.runner }}
     name: Build ${{ matrix.backend }}-${{ matrix.arch }}
+    # Skip ARM64 builds unless explicitly enabled
+    if: ${{ !matrix.conditional || github.event.inputs.build_arm64 == 'true' }}
+    timeout-minutes: 360  # 6 hours - these builds take a long time!
     
     steps:
       - name: Checkout repository
@@ -58,8 +94,9 @@ jobs:
             experimental-features = nix-command flakes
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Cachix
+      - name: Setup Cachix (optional)
         uses: cachix/cachix-action@v14
+        continue-on-error: true
         with:
           name: demod-voice
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
@@ -67,6 +104,13 @@ jobs:
 
       - name: Build Docker image
         run: |
+          echo "🔨 Building ${{ matrix.backend }}-${{ matrix.arch }} variant..."
+          echo "⏱️  This will take 15-90 minutes depending on the variant"
+          echo "   - CPU variants: ~15-20 minutes"
+          echo "   - CUDA variants: ~45-60 minutes"  
+          echo "   - ROCm variants: ~40-55 minutes"
+          echo "   - ARM64 with QEMU: 2-3x longer"
+          
           nix build .#dockerImage-${{ matrix.backend }}-${{ matrix.arch }} --print-build-logs
           docker load < result
           
