@@ -113,7 +113,7 @@
         };
       
       # Helper to make ROCm packages
-      mkRocmPackages = system:
+      mkRocmPackages = system: demod-voice:
         let
           pkgs = import nixpkgs {
             inherit system;
@@ -140,9 +140,18 @@
     in
     flake-utils.lib.eachSystem systems (system:
       let
+        pkgs = import nixpkgs {
+          inherit system;
+          config = {
+            allowUnfree = true;
+            cudaSupport = false;
+            rocmSupport = false;
+          };
+        };
+        
         basePkgs = mkPackages system;
         cudaPkgs = mkCudaPackages system;
-        rocmPkgs = mkRocmPackages system;
+        rocmPkgs = mkRocmPackages system basePkgs.demod-voice;
         
         arch = if system == "x86_64-linux" then "amd64" else "arm64";
         
