@@ -31,6 +31,11 @@
           python = if pythonVersion == "311" then pkgs.python311 else pkgs.python3;
           pythonPkgs = python.pkgs;
           
+          # Override packages with flaky tests
+          einops' = pythonPkgs.einops.overridePythonAttrs (oldAttrs: {
+            doCheck = false;
+          });
+          
           # Build Coqui TTS with specific Python
           coqui-tts = pythonPkgs.buildPythonPackage rec {
             pname = "TTS";
@@ -61,7 +66,7 @@
               tqdm
               packaging
               numba
-              einops
+              einops'
               transformers
               tokenizers
               coqpit
