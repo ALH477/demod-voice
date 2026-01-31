@@ -16,6 +16,7 @@ pkgs.python3Packages.buildPythonPackage rec {
   nativeBuildInputs = with pkgs.python3Packages; [
     setuptools
     wheel
+    cython
   ];
 
   propagatedBuildInputs = with pkgs.python3Packages; [
