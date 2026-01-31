@@ -10,7 +10,7 @@ pkgs.python3Packages.buildPythonPackage rec {
     owner = "coqui-ai";
     repo = "TTS";
     rev = "v${version}";
-    sha256 = "sha256-f/JYeASaOeByOzV7VW8z8F1VJVuKE0hFGv9sH3VJPsA=";
+    sha256 = "sha256-RQVlPHYZ5X/6xbxwGNcgntcyAsBS8T2ketdk+OCIS3Q=";
   };
   
   nativeBuildInputs = with pkgs.python3Packages; [
