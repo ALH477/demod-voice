@@ -18,6 +18,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New `--config` flag for custom config paths
 - Comprehensive test suite for config and batch modules
 
+### Fixed
+- Coqui TTS 0.22.0 dependency resolution:
+  - Override pandas to version 1.5.3 (was 2.3.3, incompatible)
+  - Pin gruut to version 2.2.3 (was 2.4.0, incompatible)
+  - Build hangul-romanize from PyPI (not in nixpkgs)
+  - Correct package names: `trainer` → `coqui-tts-trainer`, `coqpit` → `coqpit-config`
+- Added missing dependencies for full language support:
+  - Korean: g2pkk, hangul-romanize
+  - Bengali: bnnumerizer, bnunicodenormalizer
+  - General: num2words, scikit-learn, encodec
+
+### Improved
+- Better error handling with descriptive messages
+- GPU availability checking before attempting CUDA operations
+- Configurable device selection for multi-GPU systems
+- Validation of configuration values on startup
+- Modular architecture with separate config and batch modules
+
+### Planned
+- Streaming synthesis API
+- Voice conversion (speaker transfer)
+- Gradio web interface
+- Model quantization support
+
+## [1.0.1] - 2026-02-02
+
+### Added
+- Configuration system with YAML support (`~/.config/demod-voice/config.yaml`)
+- Structured logging with `--verbose` and `--quiet` flags
+- GPU validation with automatic fallback to CPU
+- Batch processing mode for CSV-based job queues
+- Health check subcommand for system diagnostics
+- Progress indicators for batch operations (tqdm)
+- New `--cpu` flag to force CPU mode
+- New `--config` flag for custom config paths
+- Comprehensive test suite for config and batch modules
+
+### Fixed
+- Coqui TTS 0.22.0 dependency resolution:
+  - Override pandas to version 1.5.3 (was 2.3.3, incompatible)
+  - Pin gruut to version 2.2.3 (was 2.4.0, incompatible)
+  - Build hangul-romanize from PyPI (not in nixpkgs)
+  - Correct package names: `trainer` → `coqui-tts-trainer`, `coqpit` → `coqpit-config`
+- Added missing dependencies for full language support:
+  - Korean: g2pkk, hangul-romanize
+  - Bengali: bnnumerizer, bnunicodenormalizer
+  - General: num2words, scikit-learn, encodec
+
 ### Improved
 - Better error handling with descriptive messages
 - GPU availability checking before attempting CUDA operations

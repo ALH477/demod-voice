@@ -10,6 +10,13 @@ Production-grade local voice cloning and text-to-speech system built with Nix. P
 - **GPU acceleration** (CUDA, ROCm, Vulkan via tinygrad)
 - **Reproducible builds** with Nix flakes
 - **Container-ready** Docker images
+- **Multi-language support** with full phonemization for:
+  - English (with DE/ES/FR variants)
+  - Chinese (Simplified)
+  - Japanese
+  - Korean
+  - Bengali
+  - Additional languages via num2words integration
 - **MIT licensed** and fully open source
 
 ## Quick Start
@@ -27,6 +34,16 @@ nix profile install github:DeMoDLLC/voice-clone-flake
 git clone https://github.com/DeMoDLLC/voice-clone-flake.git
 cd voice-clone-flake
 nix develop  # Enter development shell
+```
+
+**Simple Example:**
+```bash
+# Create a test reference audio (6-10 seconds of speech)
+# Then clone the voice:
+demod-voice xtts-zero-shot reference.wav "Hello, this is a test of voice cloning." --output test.wav
+
+# Listen to the result:
+play test.wav  # or use any audio player
 ```
 
 ### Docker (Multi-Architecture)
@@ -94,6 +111,11 @@ docker run -v $(pwd):/workspace \
 | `cpu` | All CPU variants | ~1.2GB | No GPU / Storage constrained |
 | `latest-amd64` | CUDA on AMD64 | ~4GB | Intel/AMD + NVIDIA |
 | `latest-arm64` | CPU on ARM64 | ~1GB | Apple Silicon, ARM servers |
+| `1.0.0-cuda-amd64` | CUDA on AMD64 | ~4GB | NVIDIA on Intel/AMD |
+| `1.0.0-cuda-arm64` | CUDA on ARM64 | ~3.5GB | NVIDIA on ARM (Jetson) |
+| `1.0.0-rocm-amd64` | ROCm on AMD64 | ~3.5GB | AMD on Intel/AMD |
+| `1.0.0-cpu-amd64` | CPU on AMD64 | ~1.2GB | No GPU on Intel/AMD |
+| `1.0.0-cpu-arm64` | CPU on ARM64 | ~1GB | No GPU on ARM (Apple Silicon) |
 
 **Specific Versions:**
 - `1.0.0-cuda-amd64` - NVIDIA on Intel/AMD CPUs
@@ -341,6 +363,25 @@ demod-voice
 
 ## Troubleshooting
 
+### Build Issues: Dependency Conflicts
+
+If you encounter dependency version conflicts during build:
+
+1. **Ensure you're using the latest nixpkgs branch:**
+   ```bash
+   nix flake update
+   ```
+
+2. **Check the overrides in flake.nix:**
+   - pandas is pinned to 1.5.3 (for Coqui TTS compatibility)
+   - gruut is pinned to 2.2.3
+   - Package names are corrected (e.g., `trainer` → `coqui-tts-trainer`)
+
+3. **Verify language packages are included:**
+   - All language support packages are in the `propagatedBuildInputs` list
+   - Korean support includes `hangul-romanize`, `g2pkk`, `jamo`
+   - Bengali support includes `bnnumerizer`, `bnunicodenormalizer`
+
 ### CUDA not detected
 
 ```bash
@@ -406,10 +447,10 @@ Built on the shoulders of giants:
 
 ## Support
 
-- Issues: https://github.com/DeMoDLLC/voice-clone-flake/issues
-- Discussions: https://github.com/DeMoDLLC/voice-clone-flake/discussions
-- Email: support@demod.llc
+- Issues: https://github.com/ALH477/demod-voice/issues
+- Discussions: https://github.com/ALH477/demod-voice/discussions
+- Email: alh477@proton.me
 
 ---
 
-**DeMoD LLC** - Digital Signal Processing and AI Infrastructure
+**DeMoD LTD** - Digital Signal Processing and AI Infrastructure

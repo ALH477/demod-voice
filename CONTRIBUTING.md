@@ -57,6 +57,27 @@ pytest tests/ -v
 
 # Include integration tests (requires models)
 pytest tests/ -v -m integration
+
+# Test specific modules
+pytest tests/test_config.py tests/test_batch.py -v
+
+# Run all tests with coverage
+pytest tests/ --cov=demod_voice --cov-report=html
+```
+
+### Code Style
+
+We use:
+- **Black** for Python formatting
+- **Ruff** for linting
+- **mypy** for type checking
+
+Format your code before committing:
+
+```bash
+black bin/ demod_voice/
+ruff check bin/ demod_voice/ --fix
+mypy bin/ demod_voice/
 ```
 
 ### Building

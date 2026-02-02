@@ -73,6 +73,21 @@ DeMoD Voice Clone is a production-grade voice cloning and TTS system built on Ni
 - Streaming generation support
 - GPU-accelerated inference
 
+**Language Support:**
+
+The Coqui TTS installation includes full language support through the following packages:
+
+| Language | Package | Purpose |
+|----------|---------|---------|
+| English (base) | gruut | Phonetic processing (DE/ES/FR extras) |
+| Chinese | jieba, pypinyin | Tokenization, phonemization |
+| Japanese | mecab-python3, unidic-lite | Morphological analysis |
+| Korean | jamo, hangul-romanize, g2pkk | Jamo processing, romanization |
+| Bengali | bangla, bnnumerizer, bnunicodenormalizer | Unicode normalization, numerics |
+| Multi-language | num2words, nltk | Number-to-text, NLP |
+
+All language packages are included in the Nix build, enabling full TTS synthesis capabilities across all supported languages.
+
 **Implementation Details:**
 ```python
 from TTS.api import TTS
@@ -139,6 +154,43 @@ model_name.onnx.json  # Configuration (phonemes, speakers, etc.)
 2. User config file (if exists)
 3. CLI flags (highest priority)
 
+**Configuration Structure:**
+```yaml
+# Default language for XTTS synthesis
+default_language: en
+
+# GPU settings
+gpu:
+  enabled: true
+  device_id: 0
+  mixed_precision: true
+
+# Output settings
+output:
+  sample_rate: 22050
+  format: wav
+
+# Piper settings
+piper:
+  default_speaker: 0
+
+# Preprocessing settings
+preprocessing:
+  target_sample_rate: 22050
+```
+
+**Key Functions:**
+- `load_config()`: Load configuration from file or defaults
+- `validate_config()`: Validate configuration structure and values
+- `get_default_config()`: Get default configuration dictionary
+- `save_config()`: Save configuration to file (future enhancement)
+
+**Error Handling:**
+- Validates configuration structure on load
+- Provides detailed error messages for invalid configurations
+- Falls back to defaults for missing values
+- Graceful handling of malformed YAML files
+
 ### 5. Batch Processing (`demod_voice/batch.py`)
 
 **Purpose:** Efficient processing of multiple voice cloning jobs
@@ -155,6 +207,67 @@ model_name.onnx.json  # Configuration (phonemes, speakers, etc.)
 reference,text,output,language,speaker
 /path/to/ref.wav,"Hello",/path/to/out.wav,en,0
 ```
+
+**Key Functions:**
+- `load_batch_csv()`: Load jobs from CSV file with proper error handling
+- `validate_batch_jobs()`: Validate job specifications and file paths
+- `BatchJob`: Data class representing a single batch job
+
+**Processing Flow:**
+1. Load CSV file and parse job specifications
+2. Validate all jobs before processing begins
+3. Process jobs sequentially with progress tracking
+4. Handle errors based on fail-fast setting
+5. Report final statistics (success/failure counts)
+
+**Error Handling:**
+- Validates CSV format and required columns
+- Checks file existence for reference audio
+- Provides detailed error messages for invalid jobs
+- Continues processing remaining jobs unless fail-fast is enabled
+
+### 6. Health Check System
+
+**Purpose:** System health diagnostics and dependency validation
+
+**Features:**
+- Dependency checking (Python packages, binaries)
+- GPU availability verification
+- Configuration validation
+- JSON output for automation
+- Exit codes for CI/CD integration
+
+**Health Check Components:**
+
+**Python Environment Check:**
+- Verifies Python version compatibility
+- Checks core dependencies (torch, TTS, onnxruntime)
+- Validates optional dependencies (yaml, tqdm)
+
+**GPU Validation:**
+- Detects CUDA availability via PyTorch
+- Reports GPU count and device names
+- Provides fallback recommendations
+
+**Binary Dependencies:**
+- Verifies piper-tts binary availability
+- Checks ffmpeg installation
+- Validates sox for audio processing
+
+**Configuration Validation:**
+- Loads and validates user configuration
+- Checks for required configuration values
+- Reports configuration errors with details
+
+**Output Formats:**
+- Human-readable console output
+- JSON format for programmatic consumption
+- Structured error reporting with status codes
+
+**Exit Codes:**
+- 0: All checks passed
+- 1: One or more checks failed
+- Used for automation and CI/CD pipelines
 
 ### 6. Nix Packaging
 
@@ -173,12 +286,25 @@ reference,text,output,language,speaker
 #### Python Environment
 ```nix
 pythonEnv = pkgs.python3.withPackages (ps: [
-  coqui-tts      # Built from source
+  coqui-tts      # Built from source with version overrides
   torch          # CUDA-enabled
   onnxruntime    # GPU variant
   # ... other deps
 ]);
 ```
+
+**Version Overrides for Coqui TTS 0.22.0 Compatibility:**
+
+The following packages are overridden to match Coqui TTS requirements:
+
+- `pandas`: Downgraded from 2.3.3 to 1.5.3 (requires `<2.0,>=1.4`)
+- `gruut`: Pinned to 2.2.3 (requires `==2.2.3`)
+- `hangul-romanize`: Built from PyPI 0.1.0 (not in nixpkgs)
+
+**Package Name Corrections:**
+
+- `trainer` → `coqui-tts-trainer` (actual nixpkgs name)
+- `coqpit` → `coqpit-config` (actual nixpkgs name)
 
 #### Package Build
 ```nix
@@ -374,5 +500,5 @@ All dependencies are compatible with MIT:
 
 ## Contact
 
-Technical questions: dev@demod.llc
+Technical questions: alh477@proton.me
 Architecture decisions: See GitHub Discussions
