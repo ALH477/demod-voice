@@ -64,6 +64,10 @@
               
               # Custom packages missing from nixpkgs
               customPackages = {
+                # Note: Using tokenizers and transformers from nixpkgs (no overrides)
+                # If version compatibility issues arise, they're handled by disabling
+                # runtime dependency checks in Coqui TTS below
+                
                 # Korean language support
                 hangul-romanize = prev.buildPythonPackage rec {
                   pname = "hangul-romanize";
