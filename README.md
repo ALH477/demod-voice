@@ -42,6 +42,12 @@ nix develop  # Enter development shell
 # Then clone the voice:
 demod-voice xtts-zero-shot reference.wav "Hello, this is a test of voice cloning." --output test.wav
 
+# Or use Docker:
+docker run -v $(pwd):/workspace \
+  alh477/demod-voice:cpu \
+  /bin/demod-voice xtts-zero-shot /workspace/reference.wav "Hello, this is a test of voice cloning." \
+  --output /workspace/test.wav
+
 # Listen to the result:
 play test.wav  # or use any audio player
 ```
@@ -71,7 +77,7 @@ docker pull alh477/demod-voice:cuda
 # Run with NVIDIA GPU
 docker run --gpus all -v $(pwd):/workspace \
   alh477/demod-voice:cuda \
-  xtts-zero-shot /workspace/reference.wav "Hello world" \
+  /bin/demod-voice xtts-zero-shot /workspace/reference.wav "Hello world" \
   --output /workspace/output.wav --gpu
 ```
 
@@ -84,7 +90,7 @@ docker pull alh477/demod-voice:rocm
 # Run with AMD GPU
 docker run --device /dev/kfd --device /dev/dri -v $(pwd):/workspace \
   alh477/demod-voice:rocm \
-  xtts-zero-shot /workspace/reference.wav "Hello world" \
+  /bin/demod-voice xtts-zero-shot /workspace/reference.wav "Hello world" \
   --output /workspace/output.wav --gpu
 ```
 
@@ -97,7 +103,7 @@ docker pull alh477/demod-voice:cpu
 # Run without GPU
 docker run -v $(pwd):/workspace \
   alh477/demod-voice:cpu \
-  xtts-zero-shot /workspace/reference.wav "Hello world" \
+  /bin/demod-voice xtts-zero-shot /workspace/reference.wav "Hello world" \
   --output /workspace/output.wav
 ```
 
@@ -257,6 +263,90 @@ demod-voice batch batch.csv
 
 # Stop on first error
 demod-voice batch batch.csv --fail-fast
+```
+
+### Training Custom Piper Models
+
+Train your own custom voice models using the Piper training pipeline:
+
+**Step 1: Prepare your dataset**
+```bash
+# Create dataset structure
+mkdir -p my-voice/wavs
+# Add your WAV files (16-22kHz, mono, 1-10 seconds each)
+# Create metadata.csv with format: filename|text
+# Example metadata.csv:
+# file001|This is the first audio file
+# file002|This is the second audio file
+```
+
+**Step 2: Preprocess the dataset**
+```bash
+# Preprocess using Docker
+docker run -v $(pwd):/workspace \
+  alh477/demod-voice:1.0.0-rocm-amd64 \
+  /bin/demod-voice piper-preprocess \
+  --input-dir /workspace/my-voice \
+  --output-dir /workspace/training-ready \
+  --language en-us
+```
+
+**Step 3: Install piper-train and train**
+```bash
+# Install piper-train on your host machine
+pip install piper-train
+
+# Train the model
+python -m piper_train \
+  --dataset-dir ./training-ready \
+  --output-dir ./my-model \
+  --quality medium \
+  --language en-us
+```
+
+**Step 4: Convert to ONNX for inference**
+```bash
+# Convert to ONNX format
+python -m piper_train.convert \
+  --checkpoint ./my-model/latest_model.pth \
+  --output ./my-voice.onnx \
+  --speaker-dict ./my-model/speaker_dict.json
+```
+
+**Step 5: Test your custom model**
+```bash
+# Test the trained model
+docker run -v $(pwd):/workspace \
+  alh477/demod-voice:1.0.0-rocm-amd64 \
+  /bin/demod-voice piper-infer \
+  /workspace/my-voice.onnx \
+  "Hello, this is my custom trained voice!" \
+  --output /workspace/test-output.wav
+```
+
+### XTTS License Acceptance
+
+The XTTS model requires license confirmation. To avoid interactive prompts:
+
+```bash
+# Create config to pre-accept license
+mkdir -p ~/.config/demod-voice
+cat > ~/.config/demod-voice/config.yaml << EOF
+default_language: en
+gpu:
+  enabled: true
+  device_id: 0
+  mixed_precision: true
+xtts:
+  cache_dir: null
+  temperature: 0.65
+  length_penalty: 1.0
+  repetition_penalty: 2.0
+output:
+  sample_rate: 22050
+  format: wav
+  quality: high
+EOF
 ```
 
 ### Health Check
